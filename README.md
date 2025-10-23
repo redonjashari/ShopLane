@@ -1,4 +1,4 @@
-# 🛒 Digital Marketplace - Full-Stack E-Commerce Platform
+# 🛒 ShopLane - Full-Stack E-Commerce Platform
 
 A modern, production-ready e-commerce platform built with Next.js 15, featuring digital product sales, secure payments with Stripe, and a comprehensive admin dashboard.
 
