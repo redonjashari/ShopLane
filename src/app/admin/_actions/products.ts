@@ -21,63 +21,91 @@ const addSchema = z.object({
 })
 
 export async function addProduct(prevState: unknown, formData: FormData) {
-    const result = addSchema.safeParse(Object.fromEntries(formData.entries()))
-    if (result.success === false) {
-        return result.error.formErrors.fieldErrors
+    try {
+        const result = addSchema.safeParse(Object.fromEntries(formData.entries()))
+        if (result.success === false) {
+            return result.error.formErrors.fieldErrors
+        }
+
+        const data = result.data
+
+        // Create directories if they don't exist
+        await fs.mkdir("products", { recursive: true })
+        await fs.mkdir("public/products", { recursive: true })
+
+        const filePath = `products/${crypto.randomUUID()}-${data.file.name}`
+        const imagePath = `/products/${crypto.randomUUID()}-${data.image.name}`
+
+        // Write files
+        await fs.writeFile(filePath, Buffer.from(await data.file.arrayBuffer()))
+        await fs.writeFile(`public${imagePath}`, Buffer.from(await data.image.arrayBuffer()))
+
+        // Create product in database
+        await db.product.create({ 
+            data: {
+                isAvailableForPurchase: false,
+                name: data.name,
+                description: data.description,
+                priceInCents: data.priceInCents,
+                filePath,
+                imagePath
+            },
+        })
+
+        revalidatePath("/")
+        revalidatePath("/products")
+        redirect("/admin/products")
+    } catch (error) {
+        console.error("Error adding product:", error)
+        return { _form: ["Failed to add product. Please try again."] }
     }
-
-    const data = result.data
-
-    fs.mkdir("products", { recursive: true })
-    const filePath = `products/${crypto.randomUUID()}-${data.file.name}`
-    await fs.writeFile(filePath, Buffer.from(await data.file.arrayBuffer()))
-
-    fs.mkdir("public/products", { recursive: true })
-    const imagePath = `/products/${crypto.randomUUID()}-${data.image.name}`
-    await fs.writeFile(`public${imagePath}`, Buffer.from(await data.file.arrayBuffer()))
-
-
-    await db.product.create({ 
-        data: {
-            isAvailableForPurchase: false,
-            name: data.name,
-            description: data.description,
-            priceInCents: data.priceInCents,
-            filePath,
-            imagePath
-        },
-    })
-
-    revalidatePath("/")
-    revalidatePath("/products")
-
-    redirect("/admin/products")
 }
 
 export async function toggleProductAvailability(
     id: string, 
     isAvailableForPurchase: boolean
 ) {
-    await db.product.update({ where: { id }, data: {
-        isAvailableForPurchase }}
-    )
+    try {
+        await db.product.update({ where: { id }, data: {
+            isAvailableForPurchase }}
+        )
 
-    revalidatePath("/")
-    revalidatePath("/products")
+        revalidatePath("/")
+        revalidatePath("/products")
+    } catch (error) {
+        console.error("Error toggling product availability:", error)
+        throw new Error("Failed to update product availability")
+    }
 }
 
 export async function deleteProduct(
     id: string
 ) {
-    const product = await db.product.delete({where: { id }})
+    try {
+        const product = await db.product.findUnique({ where: { id } })
+        if (product == null) return notFound()
 
-    if (product == null) return notFound()
+        await db.product.delete({where: { id }})
 
-    await fs.unlink(product.filePath)
-    await fs.unlink(`public${product.imagePath}`)
+        // Clean up files
+        try {
+            await fs.unlink(product.filePath)
+        } catch (error) {
+            console.warn("Failed to delete product file:", error)
+        }
+        
+        try {
+            await fs.unlink(`public${product.imagePath}`)
+        } catch (error) {
+            console.warn("Failed to delete product image:", error)
+        }
 
-    revalidatePath("/")
-    revalidatePath("/products")
+        revalidatePath("/")
+        revalidatePath("/products")
+    } catch (error) {
+        console.error("Error deleting product:", error)
+        throw new Error("Failed to delete product")
+    }
 }
 
 const editSchema = addSchema.extend({
@@ -86,45 +114,55 @@ const editSchema = addSchema.extend({
 })
 
 export async function updateProduct(id: string, prevState: unknown, formData: FormData) {
-    const result = editSchema.safeParse(Object.fromEntries(formData.entries()))
-    if (result.success === false) {
-        return result.error.formErrors.fieldErrors
-    }
-
-    const data = result.data
-    const product = await db.product.findUnique({ where: { id } })
-
-    if (product == null) return notFound()
-
-    let filePath = product.filePath
-    if (data.file != null && data.file.size > 0) {
-
-        await fs.unlink(product.filePath)
-        const filePath = `products/${crypto.randomUUID()}-${data.file.name}`
-        await fs.writeFile(filePath, Buffer.from(await data.file.arrayBuffer()))
-    }
-
-    let imagePath = product.imagePath
-    if (data.file != null && data.file.size > 0) {
-
-        await fs.unlink(`public${product.imagePath}`)
-        imagePath = `/products/${crypto.randomUUID()}-${data.image?.name}`
-        await fs.writeFile(`public${imagePath}`, Buffer.from(await data.file.arrayBuffer()))
-    }
-
-    await db.product.update({ 
-        where: { id },
-        data: {
-            name: data.name,
-            description: data.description,
-            priceInCents: data.priceInCents,
-            filePath,
-            imagePath,
+    try {
+        const result = editSchema.safeParse(Object.fromEntries(formData.entries()))
+        if (result.success === false) {
+            return result.error.formErrors.fieldErrors
         }
-    })
 
-    revalidatePath("/")
-    revalidatePath("/products")
+        const data = result.data
+        const product = await db.product.findUnique({ where: { id } })
 
-    redirect("/admin/products")
+        if (product == null) return notFound()
+
+        let filePath = product.filePath
+        if (data.file != null && data.file.size > 0) {
+            try {
+                await fs.unlink(product.filePath)
+            } catch (error) {
+                console.warn("Failed to delete old file:", error)
+            }
+            filePath = `products/${crypto.randomUUID()}-${data.file.name}`
+            await fs.writeFile(filePath, Buffer.from(await data.file.arrayBuffer()))
+        }
+
+        let imagePath = product.imagePath
+        if (data.image != null && data.image.size > 0) {
+            try {
+                await fs.unlink(`public${product.imagePath}`)
+            } catch (error) {
+                console.warn("Failed to delete old image:", error)
+            }
+            imagePath = `/products/${crypto.randomUUID()}-${data.image?.name}`
+            await fs.writeFile(`public${imagePath}`, Buffer.from(await data.image.arrayBuffer()))
+        }
+
+        await db.product.update({ 
+            where: { id },
+            data: {
+                name: data.name,
+                description: data.description,
+                priceInCents: data.priceInCents,
+                filePath,
+                imagePath,
+            }
+        })
+
+        revalidatePath("/")
+        revalidatePath("/products")
+        redirect("/admin/products")
+    } catch (error) {
+        console.error("Error updating product:", error)
+        return { _form: ["Failed to update product. Please try again."] }
+    }
 }

@@ -4,13 +4,24 @@ import fs from "fs/promises"
 
 export async function GET(
     request: NextRequest,
-    { params }: { params: { id: string } }
+    { params }: { params: { downloadVerificationId: string } }
 ) {
-    const { id } = params
+    const { downloadVerificationId } = params
 
-    const product = await db.product.findUnique({
-        where: { id }
+    const downloadVerification = await db.downloadVerification.findUnique({
+        where: { id: downloadVerificationId },
+        include: { product: true }
     })
+
+    if (!downloadVerification) {
+        return NextResponse.json({ error: "Download verification not found" }, { status: 404 })
+    }
+
+    if (downloadVerification.ExpiresAt < new Date()) {
+        return NextResponse.json({ error: "Download verification expired" }, { status: 410 })
+    }
+
+    const product = downloadVerification.product
 
     if (!product) {
         return NextResponse.json({ error: "Product not found" }, { status: 404 })
